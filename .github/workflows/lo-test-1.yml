@@ -66,6 +66,7 @@ jobs:
           fi
 
       - name: Update feeds and packages
+        if: false
         run: |
           cd ~/lede
           rm -rf ./tmp && rm -rf ./feeds && rm -rf ./pacakges/feeds
@@ -86,6 +87,7 @@ jobs:
           popd
 
       - name: Custom configure file
+        if: false
         run: |
           cd ~/lede && rm -rf tmp/
           cat $GITHUB_WORKSPACE/$DEVICE.config.seed $GITHUB_WORKSPACE/common.seed | sed 's/\(CONFIG_PACKAGE_luci-app-[^A-Z]*=\)y/\1m/' > .config
@@ -104,6 +106,7 @@ jobs:
           df -h .
       - name: Build and deploy packages
         timeout-minutes: 1440
+        if: false
         run: |
           ulimit -SHn 65000
           cd ~/lede
@@ -121,6 +124,7 @@ jobs:
           du -h --max-depth=1 ./build_dir
           du -h --max-depth=1 ./bin
       - name: Prepare artifact
+        if: false
         run: |
           cd
           mkdir -p ./artifact/buildinfo
@@ -141,6 +145,7 @@ jobs:
           df -h .
 
       - name: Deliver buildinfo
+        if: false
         uses: actions/upload-artifact@v2
         with:
           name: OpenWrt_buildinfo
@@ -177,111 +182,3 @@ jobs:
           if [ $? -eq 0 ]; then break; fi
           done
           set -e
-
-  generate_slim_firmware:
-    needs: build_packages
-    name: Generate ${{ github.event.client_payload.device || github.event.inputs.device }} slim firmware
-    runs-on: ubuntu-latest
-    env:
-      DEVICE: ${{ github.event.client_payload.device || github.event.inputs.device }}
-
-    steps:
-
-      - uses: actions/checkout@v2
-        with:
-          fetch-depth: 1
-
-      - name: Generate firmware
-        run: |
-          sudo apt update && sudo apt install qemu-utils
-          sudo sysctl vm.swappiness=0
-          ulimit -SHn 65000
-          curl -L https://github.com/anthqiu/sshactions/releases/download/cache/ib-$DEVICE.tar.xz | tar -Jxvf -
-          mv *imagebuilder* ib && cd ib
-          . $GITHUB_WORKSPACE/scripts/merge_files.sh
-          mkdir -p files/local_feed && sudo mount --bind packages files/local_feed
-          sed -i 's/luci-app-[^ ]*//g' include/target.mk $(find target/ -name Makefile)
-          sed -i 's/$(OPKG) install $(BUILD_PACKAGES)/$(OPKG) install --force-overwrite $(BUILD_PACKAGES)/' Makefile
-          ls packages/*.ipk | xargs -n1 basename > package.files
-          PACKAGES=$(cat $GITHUB_WORKSPACE/$DEVICE.config.seed $GITHUB_WORKSPACE/common.seed | grep CONFIG_PACKAGE | grep '=y' | grep -v CONFIG_PACKAGE_luci-app | sed 's/CONFIG_PACKAGE_//;s/=y//' | xargs -ri grep -o {} package.files | sort -u | xargs echo)
-          PACKAGES="$PACKAGES `grep -o luci-i18n-opkg-zh-cn package.files || true`"
-          make image PACKAGES="$PACKAGES $LUCI $LP luci-i18n-base-zh-cn luci-i18n-firewall-zh-cn" FILES="files"
-
-          mkdir -p $GITHUB_WORKSPACE/release
-          mv $(ls -1 ./bin/targets/*/*/*img.gz | head -1) $GITHUB_WORKSPACE/release/$DEVICE-slim.img.gz
-          cd $GITHUB_WORKSPACE/release/ && md5sum $DEVICE-slim.img.gz > $DEVICE-slim.img.gz.md5
-          gzip -dc $DEVICE-slim.img.gz | md5sum | sed "s/-/$DEVICE-slim.img/" > $DEVICE-slim.img.md5
-          echo "strDate=$(TZ=UTC-8 date +%Y-%m-%d)" >> $GITHUB_ENV
-          echo "strDevice=$(echo $DEVICE | awk '{print toupper($0)}')" >> $GITHUB_ENV
-
-      - name: Upload release asset
-        uses: svenstaro/upload-release-action@v2
-        with:
-          repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: ./release/*
-          tag: ${{env.strDate}}
-          file_glob: true
-          overwrite: true
-          release_name: ${{env.strDate}} 自动发布
-
-  generate_firmware:
-    needs: build_packages
-    if: false
-    name: Generate ${{ github.event.client_payload.device || github.event.inputs.device }} firmware
-    runs-on: ubuntu-latest
-    env:
-      DEVICE: ${{ github.event.client_payload.device || github.event.inputs.device }}
-
-    steps:
-
-      - uses: actions/checkout@v2
-        with:
-          fetch-depth: 1
-
-      - name: Generate firmware
-        run: |
-          sudo apt update && sudo apt install qemu-utils
-          sudo sysctl vm.swappiness=0
-          ulimit -SHn 65000
-          curl -L https://github.com/anthqiu/sshactions/releases/download/cache/ib-$DEVICE.tar.xz | tar -Jxvf -
-          set -x
-          mv *imagebuilder* ib && cd ib
-          . $GITHUB_WORKSPACE/scripts/merge_files.sh
-          sed -i '/local/d;s/#//' files/etc/opkg/distfeeds.conf
-          sed -i 's/luci-app-[^ ]*//g' include/target.mk $(find target/ -name Makefile)
-          sed -i 's/$(OPKG) install $(BUILD_PACKAGES)/$(OPKG) install --force-overwrite $(BUILD_PACKAGES)/' Makefile
-          ls packages/*.ipk | xargs -n1 basename > package.files
-          PACKAGES=$(cat $GITHUB_WORKSPACE/$DEVICE.config.seed $GITHUB_WORKSPACE/common.seed | grep CONFIG_PACKAGE | grep '=y' | grep -v CONFIG_PACKAGE_luci-app | sed 's/CONFIG_PACKAGE_//;s/=y//' | xargs -ri grep -o {} package.files | sort -u | xargs echo)
-          PACKAGES="$PACKAGES `grep -o luci-i18n-opkg-zh-cn package.files || true`"
-          LUCI=$(cat $GITHUB_WORKSPACE/$DEVICE.config.seed $GITHUB_WORKSPACE/common.seed | grep CONFIG_PACKAGE_luci-app | grep '=y' | grep -v docker | sed 's/CONFIG_PACKAGE_//;s/=y//' | xargs -ri grep -o {} package.files | sort -u | xargs echo)
-          LP=$(echo $LUCI | sed 's/-app-/-i18n-/g;s/ /\n/g' | xargs -ri grep -o {}-zh-cn package.files | xargs echo)
-          make image PACKAGES="$PACKAGES $LUCI $LP luci-i18n-base-zh-cn luci-i18n-firewall-zh-cn" FILES="files"
-
-          mkdir -p $GITHUB_WORKSPACE/release
-          mv $(ls -1 ./bin/targets/*/*/*img.gz | head -1) $GITHUB_WORKSPACE/release/$DEVICE.img.gz
-          cd $GITHUB_WORKSPACE/release/ && md5sum $DEVICE.img.gz > $DEVICE.img.gz.md5
-          gzip -dc $DEVICE.img.gz | md5sum | sed "s/-/$DEVICE.img/" > $DEVICE.img.md5
-          echo "strDate=$(TZ=UTC-8 date +%Y-%m-%d)" >> $GITHUB_ENV
-          echo "strDevice=$(echo $DEVICE | awk '{print toupper($0)}')" >> $GITHUB_ENV
-
-          if [[ ${{ github.event.client_payload.device || github.event.inputs.device }} == *"r1s"* ]]; then
-            exit 0
-          fi
-          cd $GITHUB_WORKSPACE/ib
-          rm -rf bin/
-          LUCI=$(cat $GITHUB_WORKSPACE/$DEVICE.config.seed $GITHUB_WORKSPACE/common.seed | grep CONFIG_PACKAGE_luci-app | sed 's/CONFIG_PACKAGE_//;s/=y//' | xargs -ri grep -o {} package.files | sort -u | xargs echo)
-          LP=$(echo $LUCI | sed 's/-app-/-i18n-/g;s/ /\n/g' | xargs -ri grep -o {}-zh-cn package.files | xargs echo | xargs echo)
-          make image PACKAGES="$PACKAGES $LUCI $LP luci-i18n-base-zh-cn luci-i18n-firewall-zh-cn" FILES="files"
-          mv $(ls -1 ./bin/targets/*/*/*img.gz | head -1) $GITHUB_WORKSPACE/release/$DEVICE-with-docker.img.gz
-          cd $GITHUB_WORKSPACE/release/ && md5sum $DEVICE-with-docker.img.gz > $DEVICE-with-docker.img.gz.md5
-          gzip -dc $DEVICE-with-docker.img.gz | md5sum | sed "s/-/$DEVICE-with-docker.img/" > $DEVICE-with-docker.img.md5
-
-      - name: Upload release asset
-        uses: svenstaro/upload-release-action@v2
-        with:
-          repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: ./release/*
-          tag: ${{env.strDate}}
-          file_glob: true
-          overwrite: true
-          release_name: ${{env.strDate}} 自动发布
